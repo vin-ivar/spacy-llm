@@ -1,15 +1,24 @@
 from pathlib import Path
+from typing import Iterable
 
 import pytest
 import spacy
 import srsly
 from confection import Config
 from pydantic import ValidationError
+from spacy.tokens import Span
+from spacy.training import Example
 from spacy.util import make_tempdir
 
-from spacy_llm.registry import fewshot_reader, lowercase_normalizer, strip_normalizer
-from spacy_llm.tasks import SpanCatTask
+from spacy_llm.registry import (
+    fewshot_reader,
+    lowercase_normalizer,
+    registry,
+    strip_normalizer,
+)
+from spacy_llm.tasks import make_spancat_task_v2
 from spacy_llm.tasks.util import find_substrings
+from spacy_llm.util import assemble_from_config
 
 from ..compat import has_openai_key
 
@@ -30,7 +39,7 @@ def zeroshot_cfg_string():
     factory = "llm"
 
     [components.llm.task]
-    @llm_tasks = "spacy.SpanCat.v1"
+    @llm_tasks = "spacy.SpanCat.v2"
     labels = PER,ORG,LOC
 
     [components.llm.task.normalizer]
@@ -57,8 +66,8 @@ def fewshot_cfg_string():
     factory = "llm"
 
     [components.llm.task]
-    @llm_tasks = "spacy.SpanCat.v1"
-    labels = PER,ORG,LOC
+    @llm_tasks = "spacy.SpanCat.v2"
+    labels = ["PER", "ORG", "LOC"]
 
     [components.llm.task.examples]
     @misc = "spacy.FewShotReader.v1"
@@ -74,6 +83,7 @@ def fewshot_cfg_string():
     """
 
 
+@pytest.mark.external
 @pytest.mark.skipif(has_openai_key is False, reason="OpenAI API key not available")
 @pytest.mark.parametrize("cfg_string", ["fewshot_cfg_string", "zeroshot_cfg_string"])
 def test_spancat_config(cfg_string, request):
@@ -182,7 +192,7 @@ def test_ensure_offsets_correspond_to_substrings(
 )
 def test_spancat_zero_shot_task(text, response, gold_spans):
     labels = "PER,ORG,LOC"
-    llm_spancat = SpanCatTask(labels=labels)
+    llm_spancat = make_spancat_task_v2(labels=labels)
     # Prepare doc
     nlp = spacy.blank("xx")
     doc_in = nlp.make_doc(text)
@@ -241,7 +251,7 @@ def test_spancat_zero_shot_task(text, response, gold_spans):
 def test_spancat_labels(response, normalizer, gold_spans):
     text = "Jean Jacques and Jaime went to the library."
     labels = "PER,ORG,LOC"
-    llm_spancat = SpanCatTask(labels=labels, normalizer=normalizer)
+    llm_spancat = make_spancat_task_v2(labels=labels, normalizer=normalizer)
     # Prepare doc
     nlp = spacy.blank("xx")
     doc_in = nlp.make_doc(text)
@@ -290,7 +300,7 @@ def test_spancat_labels(response, normalizer, gold_spans):
 def test_spancat_alignment(response, alignment_mode, gold_spans):
     text = "Jean Jacques and Jaime went to the library."
     labels = "PER,ORG,LOC"
-    llm_spancat = SpanCatTask(labels=labels, alignment_mode=alignment_mode)
+    llm_spancat = make_spancat_task_v2(labels=labels, alignment_mode=alignment_mode)
     # Prepare doc
     nlp = spacy.blank("xx")
     doc_in = nlp.make_doc(text)
@@ -304,7 +314,7 @@ def test_spancat_alignment(response, alignment_mode, gold_spans):
 def test_invalid_alignment_mode():
     labels = "PER,ORG,LOC"
     with pytest.raises(ValueError, match="Unsupported alignment mode 'invalid"):
-        SpanCatTask(labels=labels, alignment_mode="invalid")
+        make_spancat_task_v2(labels=labels, alignment_mode="invalid")
 
 
 @pytest.mark.parametrize(
@@ -339,7 +349,7 @@ def test_invalid_alignment_mode():
 def test_spancat_matching(response, case_sensitive, single_match, gold_spans):
     text = "This guy jean (or Jean) is the president of the Jean Foundation."
     labels = "PER,ORG,LOC"
-    llm_spancat = SpanCatTask(
+    llm_spancat = make_spancat_task_v2(
         labels=labels, case_sensitive_matching=case_sensitive, single_match=single_match
     )
     # Prepare doc
@@ -362,16 +372,20 @@ def test_jinja_template_rendering_without_examples():
     nlp = spacy.blank("xx")
     doc = nlp.make_doc("Alice and Bob went to the supermarket")
 
-    llm_spancat = SpanCatTask(labels=labels, examples=None)
+    llm_spancat = make_spancat_task_v2(labels=labels, examples=None)
     prompt = list(llm_spancat.generate_prompts([doc]))[0]
 
     assert (
         prompt.strip()
         == """
-From the text below, extract the following (possibly overlapping) entities in the following format:
+You are an expert Named Entity Recognition (NER) system. Your task is to accept Text as input and extract named entities for the set of predefined entity labels.
+The entities you extract for each label can overlap with each other.
+From the Text input provided, extract named entities for each label in the following format:
+
 PER: <comma delimited list of strings>
 ORG: <comma delimited list of strings>
 LOC: <comma delimited list of strings>
+
 
 Here is the text that needs labeling:
 
@@ -402,39 +416,43 @@ def test_jinja_template_rendering_with_examples(examples_path):
     doc = nlp.make_doc("Alice and Bob went to the supermarket")
 
     examples = fewshot_reader(examples_path)
-    llm_spancat = SpanCatTask(labels=labels, examples=examples)
+    llm_spancat = make_spancat_task_v2(labels=labels, examples=examples)
     prompt = list(llm_spancat.generate_prompts([doc]))[0]
 
     assert (
         prompt.strip()
         == """
-From the text below, extract the following (possibly overlapping) entities in the following format:
+You are an expert Named Entity Recognition (NER) system. Your task is to accept Text as input and extract named entities for the set of predefined entity labels.
+The entities you extract for each label can overlap with each other.
+From the Text input provided, extract named entities for each label in the following format:
+
 PER: <comma delimited list of strings>
 ORG: <comma delimited list of strings>
 LOC: <comma delimited list of strings>
 
-Below are some examples (only use these as a guide):
 
+Below are some examples (only use these as a guide):
 
 Text:
 '''
 Jack and Jill went up the hill.
 '''
+
 PER: Jack, Jill
 LOC: hill
-
 
 Text:
 '''
 Jack fell down and broke his crown.
 '''
-PER: Jack
 
+PER: Jack
 
 Text:
 '''
 Jill came tumbling after.
 '''
+
 PER: Jill
 
 
@@ -460,4 +478,38 @@ def test_example_not_following_basemodel():
         srsly.write_yaml(tmp_path, wrong_example)
 
         with pytest.raises(ValidationError):
-            SpanCatTask(labels="PER,ORG,LOC", examples=fewshot_reader(tmp_path))
+            make_spancat_task_v2(
+                labels="PER,ORG,LOC", examples=fewshot_reader(tmp_path)
+            )
+
+
+@pytest.mark.parametrize("n_detections", [0, 1, 2])
+def test_spancat_scoring(zeroshot_cfg_string, n_detections):
+    @registry.llm_backends("Dummy")
+    def factory():
+        def b(prompts: Iterable[str]) -> Iterable[str]:
+            for _ in prompts:
+                yield ("PER: Alice,Bob")
+
+        return b
+
+    config = Config().from_str(zeroshot_cfg_string)
+    config["components"]["llm"]["backend"] = {"@llm_backends": "Dummy"}
+    nlp = assemble_from_config(config)
+
+    examples = []
+
+    for text in ["Alice works with Bob.", "Bob lives with Alice."]:
+        predicted = nlp.make_doc(text)
+        reference = predicted.copy()
+
+        reference.spans["sc"] = [
+            Span(reference, 0, 1, label="PER"),
+            Span(reference, 3, 4, label="PER"),
+        ][:n_detections]
+
+        examples.append(Example(predicted, reference))
+
+    scores = nlp.evaluate(examples)
+
+    assert scores["spans_sc_p"] == n_detections / 2

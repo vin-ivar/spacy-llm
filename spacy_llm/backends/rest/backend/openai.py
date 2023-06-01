@@ -1,6 +1,6 @@
 import os
 from enum import Enum
-from typing import Dict, Iterable, List, Any, Sized
+from typing import Any, Dict, Iterable, List, Sized
 
 import requests  # type: ignore[import]
 import srsly  # type: ignore[import]
@@ -34,7 +34,7 @@ class OpenAIBackend(Backend):
             "text-ada-001": Endpoints.NON_CHAT.value,
             "davinci": Endpoints.NON_CHAT.value,
             "curie": Endpoints.NON_CHAT.value,
-            "babbage": Endpoints.NON_CHAT,
+            "babbage": Endpoints.NON_CHAT.value,
             "ada": Endpoints.NON_CHAT.value,
         }
 
@@ -71,7 +71,7 @@ class OpenAIBackend(Backend):
             )
         elif r.status_code != 200:
             raise ValueError(
-                "Error accessing api.openai.com" f"{r.status_code}: {r.text}"
+                f"Error accessing api.openai.com ({r.status_code}): {r.text}"
             )
 
         response = r.json()["data"]
