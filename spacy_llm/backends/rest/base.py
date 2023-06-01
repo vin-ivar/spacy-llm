@@ -52,7 +52,7 @@ class Backend(abc.ABC):
             raise ValueError("The LLM model must be specified in the config.")
         self._check_api_endpoint_compatibility()
 
-        assert self._max_tries >= 1
+        assert self._max_tries >= 0
         assert self._interval > 0
         assert self._max_request_time > 0
 
@@ -94,13 +94,13 @@ class Backend(abc.ABC):
             """Calls API with given timeout.
             attempt (int): Reflects the how many-th try at reaching the API this is. If attempt < self._max_tries and
                 the call fails, None is returned. If attempt == self._max_tries and the call fails, a TimeoutError is
-                raised.
+                raised. If self._max_tries is set to 0, a TimeoutError is never raised.
             RETURNS (Optional[requests.Response]): Response object.
             """
             try:
                 return call_method(url, **kwargs)
             except (ConnectTimeout, ReadTimeout, TimeoutError) as err:
-                if attempt < self._max_tries:
+                if self._max_tries == 0 or attempt < self._max_tries:
                     return None
                 else:
                     raise TimeoutError(
@@ -114,7 +114,7 @@ class Backend(abc.ABC):
         # We don't want to retry on every non-ok status code. Some are about
         # incorrect inputs, etc. and we want to terminate on those.
         start_time = time.time()
-        while i < self._max_tries and (
+        while (i < self._max_tries or self._max_tries == 0) and (
             response is None or _HTTPRetryErrorCodes.has(response.status_code)
         ):
             time.sleep(interval)
