@@ -26,6 +26,7 @@ class Backend(abc.ABC):
         strict: bool,
         max_tries: int,
         interval: float,
+        backoff_interval: bool,
         max_request_time: float,
     ):
         """Initializes new Backend instance.
@@ -100,7 +101,7 @@ class Backend(abc.ABC):
             try:
                 return call_method(url, **kwargs)
             except (ConnectTimeout, ReadTimeout, TimeoutError) as err:
-                if self._max_tries >= 1 and attempt < self._max_tries:
+                if self._max_tries == 0 or attempt < self._max_tries:
                     return None
                 else:
                     raise TimeoutError(
@@ -114,7 +115,7 @@ class Backend(abc.ABC):
         # We don't want to retry on every non-ok status code. Some are about
         # incorrect inputs, etc. and we want to terminate on those.
         start_time = time.time()
-        while i < self._max_tries and (
+        while (i < self._max_tries or self._max_tries == 0) and (
             response is None or _HTTPRetryErrorCodes.has(response.status_code)
         ):
             time.sleep(interval)
