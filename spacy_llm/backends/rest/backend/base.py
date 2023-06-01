@@ -26,7 +26,6 @@ class Backend(abc.ABC):
         strict: bool,
         max_tries: int,
         interval: float,
-        backoff_interval: bool,
         max_request_time: float,
     ):
         """Initializes new Backend instance.
